@@ -71,10 +71,10 @@ class ExtractionPipeline:
             
             # ========== LAYER 2: JAVASCRIPT ==========
             logger.info("=" * 50)
-            logger.info("LAYER 2: JavaScript State Inspection")
+            logger.info("LAYER 2: JavaScript State Inspection + API")
             logger.info("=" * 50)
             
-            result = await cls._try_js_layer(page)
+            result = await cls._try_js_layer(page, url)
             if result:
                 return cls._build_result(result, 'javascript')
             
@@ -157,10 +157,10 @@ class ExtractionPipeline:
             return None
     
     @classmethod
-    async def _try_js_layer(cls, page: Page) -> Optional[Dict[str, Any]]:
+    async def _try_js_layer(cls, page: Page, url: str) -> Optional[Dict[str, Any]]:
         """Execute JavaScript layer extraction"""
         try:
-            result = await extract_via_js(page)
+            result = await extract_via_js(page, url)
             return result
         except Exception as e:
             logger.error(f"[JS Layer] Error: {e}")
