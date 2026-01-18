@@ -9,6 +9,3 @@ python-dotenv>=1.0.0
 
 # Async HTTP (for URL validation)
 aiohttp>=3.9.0
-
-# Cryptography for fingerprint hashing
-hashlib-compat>=1.0.0
