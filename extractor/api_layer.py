@@ -1,6 +1,6 @@
 """
-Terabox Direct API Extractor
-Uses Terabox API with ndus cookie authentication (like working bots)
+Terabox Extractor using Third-Party API
+Uses free APIs that working Terabox bots use
 """
 
 import asyncio
@@ -8,17 +8,17 @@ import aiohttp
 import re
 import json
 import logging
-from typing import Optional, Dict, Any, List
-from urllib.parse import urlparse, parse_qs, urlencode
+from typing import Optional, Dict, Any
+from urllib.parse import urlparse, quote
 import os
 
 logger = logging.getLogger(__name__)
 
 
-class TeraboxAPI:
+class TeraboxExtractor:
     """
-    Direct API client for Terabox
-    Uses ndus cookie authentication like TeraBoxFastDLBot
+    Terabox link extractor using multiple methods
+    Tries different APIs until one works
     """
     
     # Supported domains
@@ -29,345 +29,403 @@ class TeraboxAPI:
     ]
     
     HEADERS = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
     }
     
     @classmethod
-    def get_ndus_cookie(cls) -> str:
-        """Get ndus cookie from environment"""
-        return os.getenv('TERA_COOKIE', os.getenv('NDUS_COOKIE', ''))
-    
-    @classmethod
-    def extract_surl(cls, url: str) -> Optional[str]:
-        """Extract surl/shorturl from Terabox URL"""
-        # Pattern: /s/1XXXXXX or /s/XXXXXX
-        match = re.search(r'/s/1?([a-zA-Z0-9_-]+)', url)
-        if match:
-            return match.group(1)
+    async def extract(cls, url: str) -> Optional[Dict[str, Any]]:
+        """
+        Extract download link using multiple methods
+        """
+        logger.info(f"[Extractor] Starting extraction for: {url}")
         
-        # Try query param
-        parsed = urlparse(url)
-        params = parse_qs(parsed.query)
-        if 'surl' in params:
-            return params['surl'][0]
+        # Normalize URL
+        url = cls._normalize_url(url)
         
+        # Try Method 1: TeraboxDownloader API
+        result = await cls._try_terabox_downloader_api(url)
+        if result:
+            logger.info("[Extractor] Success via TeraboxDownloader API")
+            return result
+        
+        # Try Method 2: Direct page parsing with better logic
+        result = await cls._try_direct_parsing(url)
+        if result:
+            logger.info("[Extractor] Success via direct parsing")
+            return result
+        
+        # Try Method 3: Alternative API endpoints
+        result = await cls._try_alternative_apis(url)
+        if result:
+            logger.info("[Extractor] Success via alternative API")
+            return result
+        
+        logger.error("[Extractor] All extraction methods failed")
         return None
     
     @classmethod
-    def get_base_url(cls, url: str) -> str:
-        """Get base URL from the share link"""
-        parsed = urlparse(url)
+    def _normalize_url(cls, url: str) -> str:
+        """Normalize Terabox URL"""
+        # Ensure https
+        if not url.startswith('http'):
+            url = 'https://' + url
+        
+        # Convert various domains to standard format
         for domain in cls.DOMAINS:
-            if domain in parsed.netloc:
-                return f"https://www.{domain}"
-        return "https://www.terabox.com"
+            if domain in url:
+                # Extract the share path
+                match = re.search(r'/s/([a-zA-Z0-9_-]+)', url)
+                if match:
+                    return f"https://www.terabox.com/s/{match.group(1)}"
+        
+        return url
     
     @classmethod
-    async def get_file_info(cls, url: str) -> Optional[Dict[str, Any]]:
+    async def _try_terabox_downloader_api(cls, url: str) -> Optional[Dict[str, Any]]:
         """
-        Get file information from Terabox share link
-        Uses ndus cookie authentication
+        Try the terabox downloader approach
+        This mimics what successful bots do
         """
-        surl = cls.extract_surl(url)
-        if not surl:
-            logger.error("Could not extract surl from URL")
-            return None
-        
-        logger.info(f"Extracted surl: {surl}")
-        
-        ndus = cls.get_ndus_cookie()
-        base_url = cls.get_base_url(url)
-        
-        logger.info(f"Using base URL: {base_url}")
-        logger.info(f"NDUS cookie: {'present' if ndus else 'NOT SET'}")
-        
-        # Set up cookies
-        cookies = {}
-        if ndus:
-            cookies['ndus'] = ndus
-        
-        async with aiohttp.ClientSession(cookies=cookies) as session:
-            try:
-                # Step 1: Get the share page HTML to extract data
-                share_url = f"{base_url}/sharing/link?surl={surl}"
-                logger.info(f"Fetching share page: {share_url}")
+        try:
+            async with aiohttp.ClientSession() as session:
+                # First, get the page and extract the data
+                headers = {
+                    **cls.HEADERS,
+                    'Cookie': f'ndus={os.getenv("TERA_COOKIE", "")}'
+                }
                 
-                async with session.get(share_url, headers=cls.HEADERS, allow_redirects=True) as response:
+                async with session.get(url, headers=headers, allow_redirects=True, timeout=30) as response:
                     if response.status != 200:
                         logger.warning(f"Page returned status {response.status}")
                         return None
                     
                     html = await response.text()
                     
-                    # Update cookies from response
-                    for cookie in response.cookies.values():
-                        cookies[cookie.key] = cookie.value
-                
-                # Extract data from HTML
-                page_data = cls._extract_page_data(html)
-                if not page_data:
-                    logger.warning("Could not extract page data")
+                    # Extract data from HTML
+                    data = cls._parse_terabox_html(html)
+                    
+                    if data and data.get('download_link'):
+                        return {
+                            'url': data['download_link'],
+                            'filename': data.get('filename'),
+                            'filesize': data.get('filesize'),
+                            'filetype': data.get('filetype', 'file')
+                        }
+                    
+                    # Try to call internal API
+                    if data:
+                        api_result = await cls._call_terabox_api(session, data, url)
+                        if api_result:
+                            return api_result
+                    
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"TeraboxDownloader API error: {e}")
+            return None
+    
+    @classmethod
+    def _parse_terabox_html(cls, html: str) -> Optional[Dict]:
+        """Parse Terabox HTML to extract file data"""
+        result = {}
+        
+        try:
+            # Try to find yunData
+            yun_match = re.search(r'var\s+yunData\s*=\s*(\{[^;]+\});', html)
+            if not yun_match:
+                yun_match = re.search(r'window\.yunData\s*=\s*(\{[^;]+\});', html)
+            
+            if yun_match:
+                try:
+                    yun_data = json.loads(yun_match.group(1))
+                    result['yunData'] = yun_data
+                    result['shareid'] = yun_data.get('shareid')
+                    result['uk'] = yun_data.get('uk')
+                    result['sign'] = yun_data.get('sign')
+                    result['timestamp'] = yun_data.get('timestamp')
+                    
+                    # Get file list
+                    file_list = yun_data.get('file_list', {})
+                    if isinstance(file_list, dict):
+                        files = file_list.get('list', [])
+                    else:
+                        files = file_list if isinstance(file_list, list) else []
+                    
+                    if files:
+                        # Get video or largest file
+                        best = None
+                        for f in files:
+                            if f.get('isdir') == 0 or not f.get('isdir'):
+                                if f.get('category') == 1:  # Video
+                                    best = f
+                                    break
+                                if not best or (f.get('size', 0) > best.get('size', 0)):
+                                    best = f
+                        
+                        if best:
+                            result['fs_id'] = best.get('fs_id')
+                            result['filename'] = best.get('server_filename')
+                            result['filesize'] = best.get('size')
+                            result['filetype'] = 'video' if best.get('category') == 1 else 'file'
+                            
+                            # Check for direct link
+                            if best.get('dlink'):
+                                result['download_link'] = best['dlink']
+                except json.JSONDecodeError:
+                    pass
+            
+            # Extract jsToken
+            token_patterns = [
+                r'window\.jsToken\s*=\s*["\']([^"\']+)["\']',
+                r'"jsToken"\s*:\s*"([^"]+)"',
+                r"jsToken\s*=\s*'([^']+)'",
+            ]
+            for pattern in token_patterns:
+                match = re.search(pattern, html)
+                if match:
+                    result['jsToken'] = match.group(1)
+                    break
+            
+            # Try to find direct link in page
+            dlink_match = re.search(r'"dlink"\s*:\s*"([^"]+)"', html)
+            if dlink_match:
+                dlink = dlink_match.group(1).replace('\\/', '/')
+                if not result.get('download_link'):
+                    result['download_link'] = dlink
+            
+        except Exception as e:
+            logger.debug(f"Parse error: {e}")
+        
+        return result if result else None
+    
+    @classmethod
+    async def _call_terabox_api(cls, session: aiohttp.ClientSession, data: Dict, url: str) -> Optional[Dict[str, Any]]:
+        """Call Terabox API to get download link"""
+        try:
+            # Extract surl
+            surl_match = re.search(r'/s/1?([a-zA-Z0-9_-]+)', url)
+            if not surl_match:
+                return None
+            
+            surl = surl_match.group(1)
+            js_token = data.get('jsToken', '')
+            
+            # Build API URL
+            params = {
+                'app_id': '250528',
+                'web': '1',
+                'channel': 'dubox',
+                'jsToken': js_token,
+                'dp-logid': '',
+                'page': '1',
+                'num': '100',
+                'by': 'name',
+                'order': 'asc',
+                'shorturl': surl,
+                'root': '1'
+            }
+            
+            list_url = "https://www.terabox.com/share/list?" + "&".join([f"{k}={v}" for k, v in params.items()])
+            
+            headers = {
+                **cls.HEADERS,
+                'Cookie': f'ndus={os.getenv("TERA_COOKIE", "")}',
+                'Referer': url
+            }
+            
+            async with session.get(list_url, headers=headers, timeout=30) as response:
+                if response.status != 200:
                     return None
                 
-                logger.info(f"Found jsToken: {'yes' if page_data.get('jsToken') else 'no'}")
-                logger.info(f"Found file list with {len(page_data.get('fileList', []))} files")
+                api_data = await response.json()
                 
-                # If we already have file list with dlink, use it
-                file_list = page_data.get('fileList', [])
-                if file_list:
-                    for f in file_list:
-                        if f.get('dlink'):
-                            logger.info("Found dlink in initial page data!")
-                            return {
-                                'url': f['dlink'],
-                                'filename': f.get('server_filename'),
-                                'filesize': f.get('size'),
-                                'filetype': 'video' if f.get('category') == 1 else 'file'
-                            }
+                if api_data.get('errno') != 0:
+                    logger.warning(f"API errno: {api_data.get('errno')}")
+                    return None
                 
-                # Step 2: Use API to get file list
-                js_token = page_data.get('jsToken', '')
+                file_list = api_data.get('list', [])
                 
-                list_params = {
+                # Find best file
+                best = None
+                for f in file_list:
+                    if f.get('isdir') == 0:
+                        if f.get('category') == 1:
+                            best = f
+                            break
+                        if not best or f.get('size', 0) > best.get('size', 0):
+                            best = f
+                
+                if not best:
+                    return None
+                
+                # Check for dlink
+                if best.get('dlink'):
+                    return {
+                        'url': best['dlink'],
+                        'filename': best.get('server_filename'),
+                        'filesize': best.get('size'),
+                        'filetype': 'video' if best.get('category') == 1 else 'file'
+                    }
+                
+                # Need to get download link
+                fs_id = best.get('fs_id')
+                uk = api_data.get('uk')
+                shareid = api_data.get('shareid')
+                
+                if not all([fs_id, uk, shareid]):
+                    return None
+                
+                download_params = {
                     'app_id': '250528',
                     'web': '1',
                     'channel': 'dubox',
                     'jsToken': js_token,
                     'dp-logid': '',
-                    'page': '1',
-                    'num': '100',
-                    'by': 'name',
-                    'order': 'asc',
                     'shorturl': surl,
-                    'root': '1'
+                    'fid_list': f'[{fs_id}]',
+                    'uk': str(uk),
+                    'shareid': str(shareid)
                 }
                 
-                list_url = f"{base_url}/share/list?" + urlencode(list_params)
-                logger.info("Fetching file list via API...")
+                download_url = "https://www.terabox.com/share/download?" + "&".join([f"{k}={v}" for k, v in download_params.items()])
                 
-                async with session.get(list_url, headers=cls.HEADERS) as response:
-                    data = await response.json()
+                async with session.get(download_url, headers=headers, timeout=30) as dl_response:
+                    dl_data = await dl_response.json()
                     
-                    if data.get('errno') != 0:
-                        logger.warning(f"File list API error: errno={data.get('errno')}")
-                        # Try without jsToken
-                        return await cls._try_without_token(session, base_url, surl, cookies)
+                    if dl_data.get('errno') == 0:
+                        dlink = dl_data.get('dlink')
+                        if not dlink and dl_data.get('list'):
+                            dlink = dl_data['list'][0].get('dlink')
+                        
+                        if dlink:
+                            return {
+                                'url': dlink,
+                                'filename': best.get('server_filename'),
+                                'filesize': best.get('size'),
+                                'filetype': 'video' if best.get('category') == 1 else 'file'
+                            }
+                
+                return None
+                
+        except Exception as e:
+            logger.error(f"API call error: {e}")
+            return None
+    
+    @classmethod
+    async def _try_direct_parsing(cls, url: str) -> Optional[Dict[str, Any]]:
+        """Try direct HTML parsing with mobile user agent"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Try mobile user agent
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Cookie': f'ndus={os.getenv("TERA_COOKIE", "")}'
+                }
+                
+                async with session.get(url, headers=headers, allow_redirects=True, timeout=30) as response:
+                    html = await response.text()
                     
-                    file_list = data.get('list', [])
-                    logger.info(f"Got {len(file_list)} files from API")
+                    # Look for video player source
+                    video_match = re.search(r'"(https?://[^"]+\.mp4[^"]*)"', html)
+                    if video_match:
+                        video_url = video_match.group(1).replace('\\/', '/')
+                        if 'terabox' in video_url or 'd.' in video_url:
+                            return {
+                                'url': video_url,
+                                'filename': 'video.mp4',
+                                'filesize': None,
+                                'filetype': 'video'
+                            }
                     
-                    if not file_list:
-                        return None
-                    
-                    # Get the best file
-                    best_file = cls._select_best_file(file_list)
-                    if not best_file:
-                        return None
-                    
-                    logger.info(f"Selected file: {best_file.get('server_filename')}")
-                    
-                    # Check if file already has dlink
-                    if best_file.get('dlink'):
+                    # Look for any download link
+                    dlink_match = re.search(r'"dlink"\s*:\s*"([^"]+)"', html)
+                    if dlink_match:
                         return {
-                            'url': best_file['dlink'],
-                            'filename': best_file.get('server_filename'),
-                            'filesize': best_file.get('size'),
-                            'filetype': 'video' if best_file.get('category') == 1 else 'file'
-                        }
-                    
-                    # Step 3: Get download link
-                    download_url = await cls._get_download_link(
-                        session, base_url, surl, js_token,
-                        best_file.get('fs_id'),
-                        data.get('uk'),
-                        data.get('shareid')
-                    )
-                    
-                    if download_url:
-                        return {
-                            'url': download_url,
-                            'filename': best_file.get('server_filename'),
-                            'filesize': best_file.get('size'),
-                            'filetype': 'video' if best_file.get('category') == 1 else 'file'
+                            'url': dlink_match.group(1).replace('\\/', '/'),
+                            'filename': None,
+                            'filesize': None,
+                            'filetype': 'file'
                         }
                     
                     return None
                     
-            except Exception as e:
-                logger.error(f"API extraction error: {e}", exc_info=True)
-                return None
-    
-    @classmethod
-    def _extract_page_data(cls, html: str) -> Optional[Dict]:
-        """Extract data from page HTML"""
-        result = {}
-        
-        # Extract jsToken
-        patterns = [
-            r'window\.jsToken\s*=\s*["\']([^"\']+)["\']',
-            r'"jsToken"\s*:\s*"([^"]+)"',
-            r"fn%28%22([a-fA-F0-9]+)%22%29",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, html)
-            if match:
-                result['jsToken'] = match.group(1)
-                break
-        
-        # Try to extract yunData
-        try:
-            yun_match = re.search(r'window\.yunData\s*=\s*(\{[^;]+\});', html)
-            if yun_match:
-                yun_data = json.loads(yun_match.group(1))
-                result['yunData'] = yun_data
-                result['uk'] = yun_data.get('uk')
-                result['shareid'] = yun_data.get('shareid')
-                
-                file_list = yun_data.get('file_list', {})
-                if isinstance(file_list, dict):
-                    result['fileList'] = file_list.get('list', [])
-                elif isinstance(file_list, list):
-                    result['fileList'] = file_list
-        except json.JSONDecodeError:
-            pass
-        
-        # Try to extract from __INITIAL_DATA__
-        try:
-            init_match = re.search(r'window\.__INITIAL_DATA__\s*=\s*(\{.+?\});', html, re.DOTALL)
-            if init_match:
-                init_data = json.loads(init_match.group(1))
-                if 'fileList' not in result:
-                    result['fileList'] = init_data.get('file_list', {}).get('list', [])
-        except:
-            pass
-        
-        return result if result else None
-    
-    @classmethod
-    def _select_best_file(cls, file_list: list) -> Optional[Dict]:
-        """Select the best file (prefer videos, then largest)"""
-        if not file_list:
+        except Exception as e:
+            logger.error(f"Direct parsing error: {e}")
             return None
-        
-        # Filter out directories
-        files = [f for f in file_list if f.get('isdir') == 0 or f.get('isdir') == '0']
-        
-        if not files:
-            # Maybe all are marked differently
-            files = [f for f in file_list if not f.get('isdir')]
-        
-        if not files:
-            # Just use all
-            files = file_list
-        
-        # Prefer videos (category 1)
-        videos = [f for f in files if f.get('category') == 1]
-        if videos:
-            return max(videos, key=lambda x: int(x.get('size', 0) or 0))
-        
-        # Return largest file
-        return max(files, key=lambda x: int(x.get('size', 0) or 0))
     
     @classmethod
-    async def _get_download_link(
-        cls,
-        session: aiohttp.ClientSession,
-        base_url: str,
-        surl: str,
-        js_token: str,
-        fs_id,
-        uk,
-        shareid
-    ) -> Optional[str]:
-        """Get direct download link"""
+    async def _try_alternative_apis(cls, url: str) -> Optional[Dict[str, Any]]:
+        """Try alternative third-party APIs"""
         try:
-            if not all([fs_id, uk, shareid]):
-                logger.warning(f"Missing params: fs_id={fs_id}, uk={uk}, shareid={shareid}")
-                return None
-            
-            params = {
-                'app_id': '250528',
-                'web': '1',
-                'channel': 'dubox',
-                'jsToken': js_token or '',
-                'dp-logid': '',
-                'shorturl': surl,
-                'fid_list': f'[{fs_id}]',
-                'uk': str(uk),
-                'shareid': str(shareid),
-            }
-            
-            url = f"{base_url}/share/download?" + urlencode(params)
-            logger.info("Fetching download link...")
-            
-            async with session.get(url, headers=cls.HEADERS) as response:
-                data = await response.json()
+            async with aiohttp.ClientSession() as session:
+                # Try teraboxvideodownloader.pro API
+                api_url = "https://teraboxvideodownloader.pro/api/fetch"
                 
-                logger.info(f"Download API response errno: {data.get('errno')}")
+                headers = {
+                    'User-Agent': cls.HEADERS['User-Agent'],
+                    'Content-Type': 'application/json',
+                    'Origin': 'https://teraboxvideodownloader.pro',
+                    'Referer': 'https://teraboxvideodownloader.pro/'
+                }
                 
-                if data.get('errno') == 0:
-                    # Direct dlink
-                    if data.get('dlink'):
-                        return data['dlink']
+                payload = {'url': url}
+                
+                try:
+                    async with session.post(api_url, json=payload, headers=headers, timeout=30) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            
+                            if data.get('success') and data.get('data'):
+                                file_data = data['data']
+                                download_url = file_data.get('download_url') or file_data.get('dlink')
+                                
+                                if download_url:
+                                    return {
+                                        'url': download_url,
+                                        'filename': file_data.get('filename') or file_data.get('server_filename'),
+                                        'filesize': file_data.get('size'),
+                                        'filetype': 'video' if file_data.get('is_video') else 'file'
+                                    }
+                except Exception as e:
+                    logger.debug(f"Third-party API 1 failed: {e}")
+                
+                # Try another API endpoint
+                try:
+                    api_url2 = f"https://ytshorts.savetube.me/api/v1/terabox-downloader?url={quote(url)}"
                     
-                    # List format
-                    if data.get('list') and len(data['list']) > 0:
-                        return data['list'][0].get('dlink')
+                    async with session.get(api_url2, headers={'User-Agent': cls.HEADERS['User-Agent']}, timeout=30) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            
+                            if data.get('response') and len(data['response']) > 0:
+                                file_data = data['response'][0]
+                                resolutions = file_data.get('resolutions', {})
+                                
+                                # Get highest quality
+                                for quality in ['HD Video', 'SD Video', 'Fast Download']:
+                                    if quality in resolutions:
+                                        return {
+                                            'url': resolutions[quality],
+                                            'filename': file_data.get('title'),
+                                            'filesize': None,
+                                            'filetype': 'video'
+                                        }
+                except Exception as e:
+                    logger.debug(f"Third-party API 2 failed: {e}")
                 
-                # Try errno -20 which sometimes has link
-                if data.get('dlink'):
-                    return data['dlink']
-                
-                logger.warning(f"Download API failed: {data}")
                 return None
                 
         except Exception as e:
-            logger.error(f"Error getting download link: {e}")
+            logger.error(f"Alternative API error: {e}")
             return None
-    
-    @classmethod
-    async def _try_without_token(
-        cls,
-        session: aiohttp.ClientSession,
-        base_url: str,
-        surl: str,
-        cookies: dict
-    ) -> Optional[Dict[str, Any]]:
-        """Try alternative extraction without jsToken"""
-        logger.info("Trying alternative extraction method...")
-        
-        try:
-            # Try direct API endpoint
-            share_info_url = f"{base_url}/api/shareinfo?surl={surl}&app_id=250528&web=1&channel=dubox"
-            
-            async with session.get(share_info_url, headers=cls.HEADERS) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get('errno') == 0:
-                        file_list = data.get('list', [])
-                        if file_list:
-                            best = cls._select_best_file(file_list)
-                            if best and best.get('dlink'):
-                                return {
-                                    'url': best['dlink'],
-                                    'filename': best.get('server_filename'),
-                                    'filesize': best.get('size'),
-                                    'filetype': 'video' if best.get('category') == 1 else 'file'
-                                }
-        except Exception as e:
-            logger.debug(f"Alternative method failed: {e}")
-        
-        return None
 
 
 async def extract_via_api(url: str) -> Optional[Dict[str, Any]]:
     """
-    Extract download URL using direct API calls
-    This is the fastest and most reliable method
+    Extract download URL using multiple methods
     """
-    logger.info(f"[API Layer] Extracting via direct API: {url}")
-    return await TeraboxAPI.get_file_info(url)
+    logger.info(f"[API Layer] Starting extraction: {url}")
+    return await TeraboxExtractor.extract(url)
