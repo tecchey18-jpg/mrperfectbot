@@ -149,7 +149,6 @@ class ExtractionConfig:
 @dataclass
 class BotConfig:
     """Telegram bot configuration"""
-    token: str = field(default_factory=lambda: os.getenv('BOT_TOKEN', ''))
     admin_ids: List[int] = field(default_factory=list)
     rate_limit_requests: int = 5
     rate_limit_window: int = 60  # seconds
@@ -157,6 +156,11 @@ class BotConfig:
     # Processing settings
     processing_timeout: int = 120  # seconds
     max_concurrent_extractions: int = 3
+    
+    @property
+    def token(self) -> str:
+        """Get bot token from environment (read at access time)"""
+        return os.getenv('BOT_TOKEN', '')
 
 
 @dataclass

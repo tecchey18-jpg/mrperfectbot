@@ -52,14 +52,24 @@ async def on_shutdown() -> None:
 async def main() -> None:
     """Main entry point"""
     # Validate token
-    if not config.bot.token:
+    token = config.bot.token
+    if not token:
         logger.error("BOT_TOKEN environment variable is not set!")
         logger.error("Please set BOT_TOKEN to your Telegram bot token from @BotFather")
         sys.exit(1)
     
+    # Log token info (masked for security)
+    logger.info(f"Bot token loaded: {token[:10]}...{token[-5:]} (length: {len(token)})")
+    
+    # Validate token format (should be like 123456789:ABCdefGHIjklMNOpqr)
+    if ':' not in token or len(token) < 30:
+        logger.error("BOT_TOKEN appears to be invalid format!")
+        logger.error("Token should look like: 123456789:ABCdefGHIjklMNOpqrstuvwxyz")
+        sys.exit(1)
+    
     # Create bot and dispatcher
     bot = Bot(
-        token=config.bot.token,
+        token=token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     
