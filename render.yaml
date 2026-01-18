@@ -1,11 +1,11 @@
-# Render.com Blueprint
+# Render.com Blueprint - Free Web Service
 # https://render.com/docs/blueprint-spec
 
 services:
-  - type: worker
+  - type: web
     name: terabox-bot
     env: docker
-    plan: starter
+    plan: free
     dockerfilePath: ./Dockerfile
     envVars:
       - key: BOT_TOKEN
@@ -16,3 +16,5 @@ services:
         value: "INFO"
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: "/ms-playwright"
+      - key: PORT
+        value: "10000"
