@@ -12,6 +12,7 @@ from playwright.async_api import Page
 
 from browser.fingerprint import Fingerprint
 from browser.context import ExtractionResult
+from .api_layer import extract_via_api
 from .network_layer import extract_via_network, NetworkLayer
 from .js_layer import extract_via_js
 from .dom_layer import extract_via_dom
@@ -27,8 +28,9 @@ class ExtractionPipeline:
     Multi-layer extraction pipeline for Terabox
     
     Layers:
+    0. API - Direct API calls (fastest, no browser needed)
     1. Network - Intercept HTTP traffic
-    2. JavaScript - Inspect window variables
+    2. JavaScript - Inspect window variables + API
     3. DOM - Click buttons with human behavior
     4. Recovery - Retry with new fingerprint
     """
@@ -55,7 +57,20 @@ class ExtractionPipeline:
                 error="Invalid Terabox URL. Please provide a valid share link."
             )
         
-        # Set up network interception for all layers
+        # ========== LAYER 0: DIRECT API (No browser needed) ==========
+        logger.info("=" * 50)
+        logger.info("LAYER 0: Direct API Extraction")
+        logger.info("=" * 50)
+        
+        try:
+            result = await extract_via_api(url)
+            if result and result.get('url'):
+                logger.info(f"[API] Found download URL via direct API!")
+                return cls._build_result(result, 'api')
+        except Exception as e:
+            logger.warning(f"[API Layer] Failed: {e}")
+        
+        # Set up network interception for browser-based layers
         network = NetworkLayer()
         page.on('response', network.on_response)
         
@@ -206,6 +221,26 @@ async def run_extraction(url: str) -> ExtractionResult:
     This is the main entry point for extraction
     """
     from browser.context import browser_manager
+    
+    # First try API layer (no browser needed)
+    logger.info("Attempting API extraction first...")
+    try:
+        result = await extract_via_api(url)
+        if result and result.get('url'):
+            logger.info("API extraction succeeded!")
+            return ExtractionResult(
+                success=True,
+                download_url=result['url'],
+                filename=result.get('filename'),
+                filesize=result.get('filesize'),
+                filetype=result.get('filetype', 'file'),
+                layer_used='api'
+            )
+    except Exception as e:
+        logger.warning(f"API extraction failed: {e}")
+    
+    # Fallback to browser-based extraction
+    logger.info("Falling back to browser-based extraction...")
     
     async def extractor(page: Page, fingerprint: Fingerprint) -> ExtractionResult:
         return await ExtractionPipeline.extract(page, fingerprint, url)
