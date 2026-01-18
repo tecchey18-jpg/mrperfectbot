@@ -1,6 +1,6 @@
 """
 Terabox Link Extractor Bot
-Main entry point - Webhook version for free hosting
+Main entry point - Webhook version (simplified, no browser)
 """
 
 import asyncio
@@ -16,7 +16,6 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from bot import setup_handlers
-from browser.context import browser_manager
 from config import config
 
 # Load environment variables
@@ -34,8 +33,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Reduce noise from libraries
-logging.getLogger('playwright').setLevel(logging.WARNING)
-logging.getLogger('aiogram').setLevel(logging.INFO)
 logging.getLogger('aiohttp').setLevel(logging.WARNING)
 
 # Webhook settings
@@ -45,32 +42,32 @@ PORT = int(os.getenv("PORT", 10000))
 
 async def on_startup(bot: Bot) -> None:
     """Called when bot starts - set webhook"""
-    logger.info("Initializing browser...")
-    await browser_manager.initialize()
-    
     # Get webhook URL from environment or construct from Render
     webhook_url = os.getenv("WEBHOOK_URL")
     
     if not webhook_url:
-        # Try to construct from Render's RENDER_EXTERNAL_URL
         render_url = os.getenv("RENDER_EXTERNAL_URL")
         if render_url:
             webhook_url = f"{render_url}{WEBHOOK_PATH}"
         else:
             logger.error("WEBHOOK_URL or RENDER_EXTERNAL_URL not set!")
-            logger.error("Set WEBHOOK_URL to your Render service URL + /webhook")
             return
     
     logger.info(f"Setting webhook to: {webhook_url}")
     await bot.set_webhook(webhook_url)
-    logger.info("Bot started successfully with webhook!")
+    logger.info("Bot started successfully!")
+    
+    # Log cookie status
+    if os.getenv('TERA_COOKIE'):
+        logger.info("TERA_COOKIE is set ✓")
+    else:
+        logger.warning("TERA_COOKIE not set - some extractions may fail")
 
 
 async def on_shutdown(bot: Bot) -> None:
     """Called when bot shuts down"""
     logger.info("Shutting down...")
     await bot.delete_webhook()
-    await browser_manager.close()
     logger.info("Cleanup complete")
 
 
@@ -85,16 +82,12 @@ def main() -> None:
     token = config.bot.token
     if not token:
         logger.error("BOT_TOKEN environment variable is not set!")
-        logger.error("Please set BOT_TOKEN to your Telegram bot token from @BotFather")
         sys.exit(1)
     
-    # Log token info (masked for security)
-    logger.info(f"Bot token loaded: {token[:10]}...{token[-5:]} (length: {len(token)})")
+    logger.info(f"Bot token loaded: {token[:10]}...{token[-5:]}")
     
-    # Validate token format
     if ':' not in token or len(token) < 30:
         logger.error("BOT_TOKEN appears to be invalid format!")
-        logger.error("Token should look like: 123456789:ABCdefGHIjklMNOpqrstuvwxyz")
         sys.exit(1)
     
     # Create bot and dispatcher
@@ -115,7 +108,7 @@ def main() -> None:
     # Create aiohttp web application
     app = web.Application()
     
-    # Add health check route (required for Render)
+    # Add health check routes
     app.router.add_get("/", health_check)
     app.router.add_get("/health", health_check)
     
