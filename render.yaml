@@ -1,0 +1,18 @@
+# Render.com Blueprint
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: worker
+    name: terabox-bot
+    env: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: BOT_TOKEN
+        sync: false  # Set this manually in Render dashboard
+      - key: DEBUG
+        value: "false"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "/ms-playwright"

@@ -1,0 +1,14 @@
+# Telegram Bot Framework
+aiogram>=3.4.0
+
+# Browser Automation
+playwright>=1.41.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# Async HTTP (for URL validation)
+aiohttp>=3.9.0
+
+# Cryptography for fingerprint hashing
+hashlib-compat>=1.0.0
